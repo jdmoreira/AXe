@@ -389,6 +389,15 @@ public struct AgentPolicy: Sendable {
         guard let answer = response.answers[question] else {
             throw AgentPolicyError.missingAnswer(question)
         }
+        try validateChoice(answer, named: question, allowedChoices: allowedChoices)
+        return answer
+    }
+
+    static func validateChoice(
+        _ answer: TypeSafeChoiceAnswer,
+        named question: String,
+        allowedChoices: Set<String>
+    ) throws {
         guard answer.type == "choice" else {
             throw AgentPolicyError.invalidChoice(question: question, reason: "answer type was '\(answer.type)' rather than 'choice'")
         }
@@ -412,7 +421,6 @@ public struct AgentPolicy: Sendable {
         guard selectedProbability >= maximum - 0.000_001 else {
             throw AgentPolicyError.invalidChoice(question: question, reason: "selected choice did not have the highest probability")
         }
-        return answer
     }
 
     private static func targetQuestion(for operation: AgentOperation) -> String {

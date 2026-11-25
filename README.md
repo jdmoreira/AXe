@@ -329,7 +329,7 @@ The [AXe skill](agent-plugin/skills/axe/SKILL.md) is the guide for agents; the [
 
 ## Autonomous agent command
 
-`axe agent "<goal>" --udid <UDID>` turns a natural-language goal into AXe actions with TypeSafe AI's Jev model, one checked action at a time, from the accessibility tree without screenshots. It needs `TYPESAFE_API_KEY`; values that the goal does not state need an OpenAI-compatible text model (`AXE_TEXT_MODEL_API_KEY`). Base URLs must use HTTPS, except for `localhost`, `127.0.0.1` or `::1`.
+`axe agent "<goal>" --udid <UDID>` turns a goal into checked simulator actions using the accessibility tree. TypeSafe AI's Jev is the default and uses `TYPESAFE_API_KEY`. To use OpenAI Decisions, set `AXE_AGENT_PROVIDER=decisions` and `OPENAI_API_KEY`. The command arguments stay the same.
 
 ```bash
 axe agent "Open Settings and turn on Airplane Mode" --udid "$UDID"

@@ -112,6 +112,16 @@ export TYPESAFE_MODEL=jev-latest
 
 The command defaults to `jev-latest` and sends requests to `https://api.typesafe.ai/v1/systemone`.
 
+## OpenAI Decisions
+
+Set `AXE_AGENT_PROVIDER=decisions` and `OPENAI_API_KEY` in the environment. Use the same
+`axe agent` arguments. Jev remains the default.
+
+AXe sends the goal and accessibility state to `POST /v1/decisions`. Both providers
+use the action checks described above. Set `OPENAI_BASE_URL` or `--base-url` to override
+the API base. The JSON timing key `jevMilliseconds` reports the selected provider's
+latency. See the [OpenAI Decisions guide](https://developers.openai.com/api/docs/guides/decisions).
+
 ## Text values
 
 Jev chooses operations and bounded targets; it does not generate arbitrary field content. AXe uses two paths for `TYPE_TEXT`:

@@ -5,9 +5,9 @@ import Foundation
 struct AgentCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "agent",
-        abstract: "Reach a natural-language goal on a simulator with TypeSafe AI.",
+        abstract: "Reach a natural-language goal on a simulator.",
         discussion: """
-        AXe reads the frontmost app's accessibility tree, asks TypeSafe AI's Jev model for one action at a time and checks each action before sending it; screenshots are not sent. Set TYPESAFE_API_KEY. Text that the goal does not state also needs AXE_TEXT_MODEL_API_KEY for an OpenAI-compatible text model. This command is separate from the --agent option of other commands.
+        AXe reads the frontmost app's accessibility tree, asks a decision provider for one action at a time and checks it before sending input. AXe sends no screenshots. The default is Jev with TYPESAFE_API_KEY. Set AXE_AGENT_PROVIDER=decisions and OPENAI_API_KEY to use OpenAI Decisions. Text that the goal does not state also needs AXE_TEXT_MODEL_API_KEY for an OpenAI-compatible text model. This command is separate from the --agent option of other commands.
 
         Examples:
           axe agent "Open Settings and turn on Airplane Mode" --udid <UDID>
@@ -24,10 +24,10 @@ struct AgentCommand: AsyncParsableCommand {
     @Option(name: .customLong("max-steps"), help: "Most actions before stopping, 1 to 200.")
     var maximumSteps: Int = 40
 
-    @Option(name: .customLong("model"), help: "TypeSafe model (default: TYPESAFE_MODEL, TYPESAFE_DEFAULT_MODEL or jev-latest).")
+    @Option(name: .customLong("model"), help: "Override the provider's model.")
     var model: String?
 
-    @Option(name: .customLong("base-url"), help: "TypeSafe API base URL, HTTPS unless on this Mac (default: TYPESAFE_BASE_URL or https://api.typesafe.ai).")
+    @Option(name: .customLong("base-url"), help: "Override the provider's API base URL. HTTPS unless on this Mac.")
     var baseURL: String?
 
     @Option(
@@ -67,6 +67,81 @@ struct AgentCommand: AsyncParsableCommand {
         try await performGlobalSetup(logger: logger)
 
         let environment = ProcessInfo.processInfo.environment
+        let (client, resolvedModel, inputRate) = try decisionConfiguration(environment: environment)
+        let textModelClient = try Self.makeTextModelClient(environment: environment)
+        let traceURL = tracePath.map {
+            URL(fileURLWithPath: NSString(string: $0).expandingTildeInPath)
+        }
+
+        let runner = await SimulatorAgentRunner(
+            goal: goal,
+            simulatorUDID: simulatorUDID,
+            model: resolvedModel,
+            maximumSteps: maximumSteps,
+            minimumActionProbability: minimumActionProbability,
+            inputUSDPerMillionTokens: inputRate,
+            decisionClient: client,
+            textModelClient: textModelClient,
+            traceURL: traceURL,
+            logger: logger,
+            emitProgress: !jsonOutput && !CLIOutput.isFormatted
+        )
+        let result: SimulatorAgentRunResult
+        do {
+            result = try await runner.run()
+        } catch {
+            let usage = await runner.usage
+            if !jsonOutput, !CLIOutput.isFormatted, usage.calls > 0 {
+                print(Self.usageDescription(usage, provider: client.name), to: &standardError)
+            }
+            throw error
+        }
+
+        if CLIOutput.isFormatted {
+            try CLIOutput.writeJSON(result)
+        } else if jsonOutput {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+            let data = try encoder.encode(result)
+            guard let value = String(data: data, encoding: .utf8) else {
+                throw CLIError(errorDescription: "Unable to encode the agent result as JSON.")
+            }
+            print(value)
+        } else {
+            let symbol = result.status == .completed ? "✓" : "✗"
+            print("\(symbol) \(result.message)")
+            print("Steps: \(result.steps), model calls: \(result.modelCalls), elapsed: \(result.elapsedMilliseconds) ms")
+            let timing = result.timing
+            print(
+                "Time: setup \(timing.setupMilliseconds) ms, loop \(timing.loopMilliseconds) ms "
+                    + "(\(client.name) \(timing.jevMilliseconds) ms, \(timing.observations) screen reads \(timing.observationMilliseconds) ms, "
+                    + "actions \(timing.actionMilliseconds) ms)"
+            )
+            print(Self.usageDescription(result.usage, provider: client.name))
+        }
+
+        if result.status == .blocked {
+            throw ExitCode.failure
+        }
+    }
+
+    func decisionConfiguration(
+        environment: [String: String]
+    ) throws -> (client: any AgentDecisionClient, model: String, inputRate: Double) {
+        switch environment["AXE_AGENT_PROVIDER"] ?? "jev" {
+        case "jev":
+            break
+        case "decisions":
+            let base = baseURL ?? environment["OPENAI_BASE_URL"] ?? OpenAIDecisionsClient.defaultBaseURL.absoluteString
+            let client = try OpenAIDecisionsClient(
+                apiKey: environment["OPENAI_API_KEY"] ?? "",
+                baseURL: Self.validatedHTTPURL(base, optionName: "OpenAI base URL")
+            )
+            return (client, model ?? OpenAIDecisionsClient.defaultModel, OpenAIDecisionsClient.defaultInputUSDPerMillionTokens)
+        default:
+            throw CLIError(errorDescription: "AXE_AGENT_PROVIDER must be jev or decisions.")
+        }
+
         guard let apiKey = environment["TYPESAFE_API_KEY"],
               !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw CLIError(
@@ -89,62 +164,7 @@ struct AgentCommand: AsyncParsableCommand {
             apiKey: apiKey,
             baseURL: resolvedBaseURL
         )
-        let inputUSDPerMillionTokens = try Self.inputUSDPerMillionTokens(environment: environment)
-        let textModelClient = try Self.makeTextModelClient(environment: environment)
-        let traceURL = tracePath.map {
-            URL(fileURLWithPath: NSString(string: $0).expandingTildeInPath)
-        }
-
-        let runner = await SimulatorAgentRunner(
-            goal: goal,
-            simulatorUDID: simulatorUDID,
-            model: resolvedModel,
-            maximumSteps: maximumSteps,
-            minimumActionProbability: minimumActionProbability,
-            inputUSDPerMillionTokens: inputUSDPerMillionTokens,
-            typeSafeClient: typeSafeClient,
-            textModelClient: textModelClient,
-            traceURL: traceURL,
-            logger: logger,
-            emitProgress: !jsonOutput && !CLIOutput.isFormatted
-        )
-        let result: SimulatorAgentRunResult
-        do {
-            result = try await runner.run()
-        } catch {
-            let usage = await runner.usage
-            if !jsonOutput, !CLIOutput.isFormatted, usage.calls > 0 {
-                print(Self.usageDescription(usage), to: &standardError)
-            }
-            throw error
-        }
-
-        if CLIOutput.isFormatted {
-            try CLIOutput.writeJSON(result)
-        } else if jsonOutput {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-            let data = try encoder.encode(result)
-            guard let value = String(data: data, encoding: .utf8) else {
-                throw CLIError(errorDescription: "Unable to encode the agent result as JSON.")
-            }
-            print(value)
-        } else {
-            let symbol = result.status == .completed ? "✓" : "✗"
-            print("\(symbol) \(result.message)")
-            print("Steps: \(result.steps), model calls: \(result.modelCalls), elapsed: \(result.elapsedMilliseconds) ms")
-            let timing = result.timing
-            print(
-                "Time: setup \(timing.setupMilliseconds) ms, loop \(timing.loopMilliseconds) ms "
-                    + "(Jev \(timing.jevMilliseconds) ms, \(timing.observations) screen reads \(timing.observationMilliseconds) ms, "
-                    + "actions \(timing.actionMilliseconds) ms)"
-            )
-            print(Self.usageDescription(result.usage))
-        }
-
-        if result.status == .blocked {
-            throw ExitCode.failure
-        }
+        return (typeSafeClient, resolvedModel, try Self.inputUSDPerMillionTokens(environment: environment))
     }
 
     private static func inputUSDPerMillionTokens(environment: [String: String]) throws -> Double {
@@ -159,8 +179,8 @@ struct AgentCommand: AsyncParsableCommand {
         return value
     }
 
-    private static func usageDescription(_ usage: TypeSafeUsageSummary) -> String {
-        var description = "Jev usage: \(usage.calls) calls, \(usage.inputTokens) input tokens, "
+    private static func usageDescription(_ usage: TypeSafeUsageSummary, provider: String) -> String {
+        var description = "\(provider) usage: \(usage.calls) calls, \(usage.inputTokens) input tokens, "
             + "\(usage.outputTokens) output tokens, "
             + String(
                 format: "estimated cost $%.6f (input $%g per MTok, output free)",

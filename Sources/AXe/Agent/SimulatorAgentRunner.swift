@@ -21,7 +21,7 @@ struct SimulatorAgentRunResult: Codable, Sendable {
     let finalScreen: AgentScreenSnapshot
 }
 
-/// Where run time went. `loopMilliseconds` starts at the first Jev request, after setup.
+/// Where run time went. `loopMilliseconds` starts at the first provider request, after setup.
 struct SimulatorAgentRunTiming: Codable, Sendable {
     var setupMilliseconds = 0
     var loopMilliseconds = 0
@@ -97,7 +97,7 @@ final class SimulatorAgentRunner {
     private let model: String
     private let maximumSteps: Int
     private let minimumActionProbability: Double
-    private let typeSafeClient: TypeSafeClient
+    private let decisionClient: any AgentDecisionClient
     private let textModelClient: AgentTextModelClient?
     private let logger: AxeLogger
     private let emitProgress: Bool
@@ -117,7 +117,7 @@ final class SimulatorAgentRunner {
         maximumSteps: Int,
         minimumActionProbability: Double,
         inputUSDPerMillionTokens: Double,
-        typeSafeClient: TypeSafeClient,
+        decisionClient: any AgentDecisionClient,
         textModelClient: AgentTextModelClient?,
         traceURL: URL?,
         logger: AxeLogger,
@@ -129,7 +129,7 @@ final class SimulatorAgentRunner {
         self.maximumSteps = maximumSteps
         self.minimumActionProbability = minimumActionProbability
         self.usage = TypeSafeUsageSummary(inputUSDPerMillionTokens: inputUSDPerMillionTokens)
-        self.typeSafeClient = typeSafeClient
+        self.decisionClient = decisionClient
         self.textModelClient = textModelClient
         self.logger = logger
         self.emitProgress = emitProgress
@@ -151,8 +151,8 @@ final class SimulatorAgentRunner {
         let started = clock.now
         defer { observer.close() }
 
-        // Open the TypeSafe connection while the simulator is inspected.
-        let client = typeSafeClient
+        // Open the provider connection while the simulator is inspected.
+        let client = decisionClient
         async let warmUp: Void = client.warmUp()
         let applications = try await SimulatorApplicationCatalog.applications(on: observer.target())
         var currentApplication: AgentApplication?
@@ -189,9 +189,9 @@ final class SimulatorAgentRunner {
                 textHelperAvailable: textModelClient != nil
             )
 
-            // Jev decides while the freshness read runs, instead of reading after the answer.
+            // The provider decides while the freshness read runs, instead of reading after the answer.
             let stepStarted = clock.now
-            async let modelResult = Self.timedSystemOne(client, prepared.payload)
+            async let modelResult = Self.timedDecision(client, prepared.payload)
             let freshnessReadStarted = clock.now
             let freshScreen = try await read(currentApplication: currentApplication, handle: .reuse)
             let freshnessReadMilliseconds = Self.milliseconds(since: freshnessReadStarted)
@@ -256,14 +256,14 @@ final class SimulatorAgentRunner {
                         )
                     )
                 )
-                progress("↻ Screen changed while Jev was deciding; discarded the stale action.")
+                progress("↻ Screen changed while the provider was deciding; discarded the stale action.")
                 screen = settled.screen
                 continue
             }
             consecutiveStaleDecisions = 0
 
             // BLOCKED ends the run, so confirm it on a settled screen first. A screen caught during an
-            // app launch has no targets at all, which reads to Jev as "nothing can make progress".
+            // app launch has no targets at all, which reads to the provider as "nothing can make progress".
             if decision.operation == .blocked, !blockedOnceAlready {
                 blockedOnceAlready = true
                 let resettled = try await observeSettled(currentApplication: currentApplication, seed: actingScreen)
@@ -305,8 +305,8 @@ final class SimulatorAgentRunner {
             if decision.operation == .done || decision.operation == .blocked {
                 let status: SimulatorAgentRunResult.Status = decision.operation == .done ? .completed : .blocked
                 let message = decision.operation == .done
-                    ? "TypeSafe confirmed that every requested requirement is visible."
-                    : "TypeSafe reported that no offered action could make further progress."
+                    ? "\(client.name) reported that the goal is satisfied."
+                    : "\(client.name) reported that no offered action could make further progress."
                 try traceRecorder?.append(
                     SimulatorAgentTraceEvent(
                         modelCall: modelCalls,
@@ -375,7 +375,7 @@ final class SimulatorAgentRunner {
                     reads += 1
                 }
                 // A tap that launches an app leaves SpringBoard's launch transition on screen, which has
-                // no targets at all. Keep reading rather than asking Jev to choose from nothing.
+                // no targets at all. Keep reading rather than asking the provider to choose from nothing.
                 let actionable = try await observeActionable(
                     currentApplication: currentApplication,
                     seed: observed
@@ -420,6 +420,7 @@ final class SimulatorAgentRunner {
                 action,
                 probability: decision.operationProbability,
                 latency: latency,
+                provider: client.name,
                 stepMilliseconds: stepMilliseconds
             ))
             screen = afterScreen
@@ -498,7 +499,7 @@ final class SimulatorAgentRunner {
     }
 
     /// Waits for a screen that offers at least one tap or text-entry target, so a launch or dismissal
-    /// transition is never sent to Jev as "nothing can be done here".
+    /// transition is never sent to the provider as "nothing can be done here".
     private func observeActionable(
         currentApplication: AgentApplication?,
         seed: AgentScreenSnapshot
@@ -521,7 +522,7 @@ final class SimulatorAgentRunner {
     }
 
     /// After OPEN_APP, waits for the launched application to become frontmost, so the launch
-    /// animation's SpringBoard hierarchy is never sent to Jev.
+    /// animation's SpringBoard hierarchy is never sent to the provider.
     private func observeLaunched(
         _ application: AgentApplication
     ) async throws -> (screen: AgentScreenSnapshot, milliseconds: Int, reads: Int) {
@@ -541,12 +542,12 @@ final class SimulatorAgentRunner {
         return (latest, Self.milliseconds(since: started), reads)
     }
 
-    nonisolated private static func timedSystemOne(
-        _ client: TypeSafeClient,
+    nonisolated private static func timedDecision(
+        _ client: any AgentDecisionClient,
         _ payload: TypeSafeSystemOneRequest
     ) async throws -> (TypeSafeSystemOneResponse, Int) {
         let started = ContinuousClock.now
-        let response = try await client.systemOne(payload)
+        let response = try await client.decide(payload)
         return (response, milliseconds(since: started))
     }
 
@@ -565,6 +566,7 @@ final class SimulatorAgentRunner {
         _ action: AgentHistoryEntry,
         probability: Double,
         latency: Int,
+        provider: String,
         stepMilliseconds: Int
     ) -> String {
         var description = "\(action.step). \(action.operation.rawValue)"
@@ -574,7 +576,7 @@ final class SimulatorAgentRunner {
         if let text = action.text {
             description += " = \(String(text.prefix(80)))"
         }
-        description += String(format: " [p=%.3f, Jev %d ms, step %d ms]", probability, latency, stepMilliseconds)
+        description += String(format: " [p=%.3f, %@ %d ms, step %d ms]", probability, provider, latency, stepMilliseconds)
         return description
     }
 

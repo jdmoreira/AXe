@@ -7,6 +7,8 @@ description: Official skill for the AXe CLI, which gives agents eyes and hands o
 
 Use agent mode (`--agent`) for every app read and input. An agent call checks the target is still the control you saw, sends the input and returns the settled screen; if the screen changed, it sends nothing. The same commands without `--agent` are for scripts written by people: no target check, no returned screen. Never add `sleep`, `--pre-delay` or `--post-delay`.
 
+For the autonomous `axe agent <goal>` command, Jev uses `TYPESAFE_API_KEY` by default. Set `AXE_AGENT_PROVIDER=decisions` and `OPENAI_API_KEY` to use OpenAI Decisions with the same arguments. This command sends the goal and accessibility state to the configured provider.
+
 ## Step 1: Ensure AXe exists
 
 ```bash

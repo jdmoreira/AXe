@@ -5,6 +5,11 @@ All notable changes to the AXe iOS testing framework will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `axe agent` can use OpenAI Decisions for action selection. Set `AXE_AGENT_PROVIDER=decisions` and `OPENAI_API_KEY`. Jev remains the default.
+
 ## [v2.2.0] - 2026-11-25
 
 ### One command for your Mac: `axe remote`

@@ -111,7 +111,15 @@ public enum TypeSafeClientError: LocalizedError, Sendable {
     }
 }
 
-public struct TypeSafeClient: Sendable {
+public protocol AgentDecisionClient: Sendable {
+    var name: String { get }
+    func warmUp() async
+    func decide(_ payload: TypeSafeSystemOneRequest) async throws -> TypeSafeSystemOneResponse
+}
+
+public struct TypeSafeClient: AgentDecisionClient {
+    public var name: String { "Jev" }
+
     public typealias Transport = @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
 
     public static let defaultBaseURL = URL(string: "https://api.typesafe.ai")!
@@ -157,6 +165,10 @@ public struct TypeSafeClient: Sendable {
         request.httpMethod = "HEAD"
         request.timeoutInterval = 5
         _ = try? await transport(request)
+    }
+
+    public func decide(_ payload: TypeSafeSystemOneRequest) async throws -> TypeSafeSystemOneResponse {
+        try await systemOne(payload)
     }
 
     public func systemOne(_ payload: TypeSafeSystemOneRequest) async throws -> TypeSafeSystemOneResponse {

@@ -181,15 +181,15 @@ public enum AgentPolicyError: LocalizedError, Sendable {
         case .emptyGoal:
             return "The agent goal must not be empty."
         case .missingAnswer(let question):
-            return "TypeSafe did not answer the required question '\(question)'."
+            return "The decision provider did not answer the required question '\(question)'."
         case .invalidChoice(let question, let reason):
-            return "TypeSafe returned an invalid answer for '\(question)': \(reason)"
+            return "The decision provider returned an invalid answer for '\(question)': \(reason)"
         case .unsupportedOperation(let operation):
-            return "TypeSafe selected an unsupported operation: \(operation)"
+            return "The decision provider selected an unsupported operation: \(operation)"
         case .missingTarget(let operation):
-            return "TypeSafe selected \(operation.rawValue) without a valid target."
+            return "The decision provider selected \(operation.rawValue) without a valid target."
         case .actionProbabilityTooLow(let operation, let probability, let minimum):
-            return "TypeSafe selected \(operation.rawValue) with probability \(probability), below the required minimum of \(minimum)."
+            return "The decision provider selected \(operation.rawValue) with probability \(probability), below the required minimum of \(minimum)."
         }
     }
 }
